@@ -1,0 +1,147 @@
+---
+name: bosh
+
+releases:
+- name: bosh
+  url: https://bosh.io/d/github.com/cloudfoundry/bosh?v=257.3
+  sha1: e4442afcc64123e11f2b33cc2be799a0b59207d0
+- name: bosh-azure-cpi
+  url: https://bosh.io/d/github.com/cloudfoundry-incubator/bosh-azure-cpi-release?v=20
+  sha1: fb0180c685714d064b5a467eb6f2b34388fadf0a
+
+networks:
+- name: public
+  type: vip
+
+- name: private
+  type: manual
+  subnets: # You need to update the subnet configuration if you change to another subnet
+  - range: 10.0.0.0/24
+    gateway: 10.0.0.1
+    dns: [168.63.129.16, 8.8.8.8]
+    cloud_properties:
+      virtual_network_name: boshvnet-crp # Replace with virtual network name
+      subnet_name: Bosh # Replace with subnet name for BOSH VM
+
+resource_pools:
+- name: vms
+  network: private
+  stemcell:
+    url: https://bosh.io/d/stemcells/bosh-azure-hyperv-ubuntu-trusty-go_agent?v=3263.8
+    sha1: 4c7788b70be83ac816c9d962e35d6ba5c7d04a94
+  cloud_properties:
+    instance_type: Standard_D2_v2
+
+disk_pools:
+- name: disks
+  disk_size: 25_000
+
+jobs:
+- name: bosh
+  templates:
+  - {name: nats, release: bosh}
+  - {name: postgres, release: bosh}
+  - {name: powerdns, release: bosh}
+  - {name: blobstore, release: bosh}
+  - {name: director, release: bosh}
+  - {name: health_monitor, release: bosh}
+  - {name: registry, release: bosh}
+  - {name: azure_cpi, release: bosh-azure-cpi}
+
+  instances: 1
+  resource_pool: vms
+  persistent_disk_pool: disks
+
+  networks:
+  - {name: private, static_ips: [10.0.0.4], default: [dns, gateway]}
+#  - {name: public, static_ips: [104.43.10.252]}
+
+  properties:
+    nats:
+      address: 127.0.0.1
+      user: nats
+      password: YL5Z4VwWu6ZneXxPoB6SZQ
+
+    postgres: &db
+      listen_address: 127.0.0.1
+      host: 127.0.0.1
+      user: postgres
+      password: rPfgC92Mbu6JToHazkuQ
+      database: bosh
+      adapter: postgres
+
+    dns:
+      address: 10.0.0.4
+      db: *db
+      recursor: 168.63.129.16
+
+    registry:
+      address: 10.0.0.4
+      host: 10.0.0.4
+      db: *db
+      http: {user: admin, password: WXl35meF1sqGqPaooZvug, port: 25777}
+      username: admin
+      password: WXl35meF1sqGqPaooZvug
+      port: 25777
+
+    blobstore:
+      address: 10.0.0.4
+      port: 25250
+      provider: dav
+      director: {user: director, password: YigkEQzMFZff81HlI7HVQ}
+      agent: {user: agent, password: Dcaq4ePippYKXf0J8P8g}
+
+    director:
+      address: 127.0.0.1
+      name: bosh
+      db: *db
+      cpi_job: azure_cpi
+      enable_snapshots: false
+      debug:
+        keep_unreachable_vms: false
+      max_threads: 10
+      user_management:
+        provider: local
+        local:
+          users:
+          - {name: admin, password: Ko9LZTNEwvEsckv9l2vMg}
+          - {name: hm-user, password: 0j5LjU3FGGxIKZO045zEA}
+
+    hm:
+      director_account: {user: hm-user, password: 0j5LjU3FGGxIKZO045zEA}
+      resurrector_enabled: true
+
+    azure: &azure
+      environment: AzureCloud
+      subscription_id: your-subscription-id
+      storage_account_name: your-storage-account-name
+      resource_group_name: your-resource-group
+      tenant_id: your-tenant-id
+      client_id: your-client-id
+      client_secret: 'your-clident-secret'
+      ssh_user: vcap
+      ssh_public_key: your-ssh-public-key
+      default_security_group: nsg-bosh
+
+    agent: {mbus: "nats://nats:YL5Z4VwWu6ZneXxPoB6SZQ@10.0.0.4:4222"}
+
+    ntp: &ntp [0.north-america.pool.ntp.org]
+
+cloud_provider:
+  template: {name: azure_cpi, release: bosh-azure-cpi}
+
+  ssh_tunnel:
+#    host: 104.43.10.252
+    host: 10.0.0.4
+    port: 22
+    user: vcap # The user must be as same as above ssh_user
+    private_key: ~/bosh
+
+#  mbus: https://mbus-user:Zwf33rHBPN3ITQZ338l3Mw@104.43.10.252:6868
+  mbus: https://mbus-user:Zwf33rHBPN3ITQZ338l3Mw@10.0.0.4:6868
+
+  properties:
+    azure: *azure
+    agent: {mbus: "https://mbus-user:Zwf33rHBPN3ITQZ338l3Mw@0.0.0.0:6868"}
+    blobstore: {provider: local, path: /var/vcap/micro_bosh/data/cache}
+    ntp: *ntp
